@@ -1,18 +1,16 @@
-
 import librosa
 import numpy as np
 import matplotlib.pyplot as plt
-import moviepy.editor as mp
-from moviepy.video.fx.all import colorx, crop
-from mutagen.mp3 import MP3
-from mutagen.easyid3 import EasyID3
+import moviepy as mp
+import moviepy.video.fx as vfx
+from mutagen import File
+from mutagen.id3 import ID3NoHeaderError
 from PIL import Image, ImageDraw
-import random
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
+
 def generate_ai_visuals(theme):
-    # Simulated AI visuals using a gradient
     width, height = 1920, 1080
     image = Image.new("RGB", (width, height), theme)
     draw = ImageDraw.Draw(image)
@@ -25,13 +23,46 @@ def generate_ai_visuals(theme):
         draw.line([(0, i), (width, i)], fill=color)
     return image
 
+
 def extract_metadata(audio_path):
-    audio = MP3(audio_path, ID3=EasyID3)
-    return {
-        "title": audio.get("title", ["Unknown Title"])[0],
-        "artist": audio.get("artist", ["Unknown Artist"])[0],
-        "album": audio.get("album", ["Unknown Album"])[0]
-    }
+    metadata = {"title": "Unknown Title", "artist": "Unknown Artist", "album": "Unknown Album"}
+    try:
+        audio = File(audio_path)
+        if audio is None:
+            return metadata
+        tags = audio.tags
+        if tags:
+            metadata['title'] = tags.get('TIT2', metadata['title']).text[0] if 'TIT2' in tags else metadata['title']
+            metadata['artist'] = tags.get('TPE1', metadata['artist']).text[0] if 'TPE1' in tags else metadata['artist']
+            metadata['album'] = tags.get('TALB', metadata['album']).text[0] if 'TALB' in tags else metadata['album']
+    except ID3NoHeaderError:
+        pass
+    except Exception:
+        pass
+    return metadata
+
+
+def brighten(clip, factor):
+    return clip.fl_image(lambda frame: np.clip(frame * factor, 0, 255).astype(np.uint8))
+
+
+def apply_beat_effects(clip, beat_times):
+    clips = []
+    last_t = 0
+    for bt in beat_times:
+        if bt > last_t:
+            clips.append(clip.subclip(last_t, bt))
+        effect_clip = (
+            clip.subclip(bt, min(bt + 0.1, clip.duration))
+            .fx(brighten, 1.5)
+            .fx(vfx.crop, x_center=clip.w / 2, y_center=clip.h / 2, width=clip.w * 0.9, height=clip.h * 0.9)
+        )
+        clips.append(effect_clip)
+        last_t = bt + 0.1
+    if last_t < clip.duration:
+        clips.append(clip.subclip(last_t))
+    return mp.concatenate_videoclips(clips)
+
 
 def generate_waveform_video_with_effects(audio_path, output_path, theme=(0, 0, 255)):
     y, sr = librosa.load(audio_path)
@@ -65,14 +96,7 @@ def generate_waveform_video_with_effects(audio_path, output_path, theme=(0, 0, 2
     video = combined_clip.set_audio(audio_clip)
 
     # Apply beat-synced effects
-    def apply_effects(clip, beat_times):
-        def effect_at_time(t):
-            if any(np.isclose(t, beat_times, atol=0.05)):
-                return colorx(clip, 1.5).fx(crop, x_center=clip.w/2, y_center=clip.h/2, width=clip.w*0.9, height=clip.h*0.9)
-            return clip
-        return clip.fl(effect_at_time)
-
-    video_with_effects = apply_effects(video, beat_times)
+    video_with_effects = apply_beat_effects(video, beat_times)
 
     # Add metadata overlay
     metadata = extract_metadata(audio_path)
@@ -83,17 +107,20 @@ def generate_waveform_video_with_effects(audio_path, output_path, theme=(0, 0, 2
     # Export
     final_video.write_videofile(output_path, codec='libx264', audio_codec='aac')
 
+
 def select_audio_file():
     file_path = filedialog.askopenfilename(filetypes=[("Audio Files", "*.mp3 *.wav")])
     if file_path:
         audio_file_entry.delete(0, tk.END)
         audio_file_entry.insert(0, file_path)
 
+
 def select_output_file():
     file_path = filedialog.asksaveasfilename(defaultextension=".mp4", filetypes=[("MP4 Files", "*.mp4")])
     if file_path:
         output_file_entry.delete(0, tk.END)
         output_file_entry.insert(0, file_path)
+
 
 def generate_video():
     audio_path = audio_file_entry.get()
@@ -103,6 +130,7 @@ def generate_video():
         return
     generate_waveform_video_with_effects(audio_path, output_path)
     messagebox.showinfo("Success", f"Video saved to {output_path}")
+
 
 # Create the GUI
 root = tk.Tk()
